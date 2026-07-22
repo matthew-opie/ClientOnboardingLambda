@@ -12,14 +12,14 @@ namespace ClientOnboardingLambda;
 
 public class Function
 {
-    private static readonly HttpClient HttpClient = new HttpClient();
+    private static readonly HttpClient HttpClient = new ();
 
     public async Task<APIGatewayHttpApiV2ProxyResponse> FunctionHandler(APIGatewayHttpApiV2ProxyRequest lambdaEvent, ILambdaContext context)
     {
-        context.Logger.LogInformation($"Received raw Lambda URL body: {lambdaEvent?.Body}");
+        context.Logger.LogInformation($"Received raw Lambda URL body: {lambdaEvent.Body}");
 
         // 1. Fetch secret key safely from AWS Lambda Environment Variables
-        string apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty;
+        var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
@@ -27,12 +27,12 @@ public class Function
         }
 
         // 2. Extract and deserialize the actual body sent by the client
-        if (string.IsNullOrWhiteSpace(lambdaEvent?.Body))
+        if (string.IsNullOrWhiteSpace(lambdaEvent.Body))
         {
             return CreateJsonResponse(false, "Prompt body is missing.", 400);
         }
 
-        RequestModel? request = null;
+        RequestModel? request;
         try
         {
             request = JsonSerializer.Deserialize(lambdaEvent.Body, LambdaJsonContext.Default.RequestModel);
@@ -51,36 +51,34 @@ public class Function
         try
         {
             // 3. Build payload for OpenAI Chat Completions API
-            var openAiRequest = new OpenAIRequestBody
+            var openAiRequest = new OpenAiRequestBody
             {
                 Model = "gpt-4o-mini",
-                Messages = new[]
-                {
-                    new OpenAIMessage 
+                Messages =
+                [
+                    new OpenAiMessage 
                     { 
                         Role = "system", 
                         Content = "You are an AI assistant for a financial client management portal. Provide helpful, concise responses regarding client onboarding, documentation, and workflows." 
                     },
-                    new OpenAIMessage 
+                    new OpenAiMessage 
                     { 
                         Role = "user", 
                         Content = request.Prompt 
                     }
-                }
+                ]
             };
 
-            string jsonPayload = JsonSerializer.Serialize(openAiRequest, LambdaJsonContext.Default.OpenAIRequestBody);
+            string jsonPayload = JsonSerializer.Serialize(openAiRequest, LambdaJsonContext.Default.OpenAiRequestBody);
 
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
-            {
-                Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json")
-            };
-            
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions");
+            httpRequest.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
             // 4. Send Request to OpenAI
             using var httpResponse = await HttpClient.SendAsync(httpRequest);
-            string responseString = await httpResponse.Content.ReadAsStringAsync();
+            var responseString = await httpResponse.Content.ReadAsStringAsync();
 
             if (!httpResponse.IsSuccessStatusCode)
             {
@@ -89,8 +87,8 @@ public class Function
             }
 
             // 5. Parse AI Response
-            var openAiResult = JsonSerializer.Deserialize(responseString, LambdaJsonContext.Default.OpenAIResponseBody);
-            string aiOutput = openAiResult?.Choices?[0]?.Message?.Content ?? "No content returned from OpenAI.";
+            var openAiResult = JsonSerializer.Deserialize(responseString, LambdaJsonContext.Default.OpenAiResponseBody);
+            var aiOutput = openAiResult?.Choices?[0].Message?.Content ?? "No content returned from OpenAI.";
 
             return CreateJsonResponse(true, aiOutput, 200);
         }
@@ -116,7 +114,7 @@ public class Function
         {
             StatusCode = statusCode,
             Body = jsonBody,
-            Headers = new System.Collections.Generic.Dictionary<string, string>
+            Headers = new Dictionary<string, string>
             {
                 { "Content-Type", "application/json" }
             }
@@ -146,16 +144,16 @@ public class ResponseModel
     public DateTime Timestamp { get; set; }
 }
 
-public class OpenAIRequestBody
+public class OpenAiRequestBody
 {
     [JsonPropertyName("model")]
     public string Model { get; set; } = "gpt-4o-mini";
 
     [JsonPropertyName("messages")]
-    public OpenAIMessage[] Messages { get; set; } = Array.Empty<OpenAIMessage>();
+    public OpenAiMessage[] Messages { get; set; } = Array.Empty<OpenAiMessage>();
 }
 
-public class OpenAIMessage
+public class OpenAiMessage
 {
     [JsonPropertyName("role")]
     public string Role { get; set; } = string.Empty;
@@ -164,22 +162,22 @@ public class OpenAIMessage
     public string Content { get; set; } = string.Empty;
 }
 
-public class OpenAIResponseBody
+public class OpenAiResponseBody
 {
     [JsonPropertyName("choices")]
-    public OpenAIChoice[]? Choices { get; set; }
+    public OpenAiChoice[]? Choices { get; set; }
 }
 
-public class OpenAIChoice
+public class OpenAiChoice
 {
     [JsonPropertyName("message")]
-    public OpenAIMessage? Message { get; set; }
+    public OpenAiMessage? Message { get; set; }
 }
 
 [JsonSerializable(typeof(RequestModel))]
 [JsonSerializable(typeof(ResponseModel))]
-[JsonSerializable(typeof(OpenAIRequestBody))]
-[JsonSerializable(typeof(OpenAIResponseBody))]
+[JsonSerializable(typeof(OpenAiRequestBody))]
+[JsonSerializable(typeof(OpenAiResponseBody))]
 [JsonSerializable(typeof(APIGatewayHttpApiV2ProxyRequest))]
 [JsonSerializable(typeof(APIGatewayHttpApiV2ProxyResponse))]
 public partial class LambdaJsonContext : JsonSerializerContext

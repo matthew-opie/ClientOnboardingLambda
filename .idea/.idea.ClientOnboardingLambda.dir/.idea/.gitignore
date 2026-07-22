@@ -1,0 +1,32 @@
+﻿# Default ignored files
+/shelf/
+/workspace.xml
+# Rider ignored files
+/contentModel.xml
+/projectSettingsUpdater.xml
+/modules.xml
+/.idea.ClientOnboardingLambda.iml
+# Editor-based HTTP Client requests
+/httpRequests/
+# Ignored default folder with query files
+/queries/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+# JetBrains Rider & IntelliJ IDEA
+.idea/
+
+# Build & Publish Outputs
+[Bb]in/
+[Oo]bj/
+*.zip
+
+# Visual Studio & VS Code IDE Specific Settings
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Operating System Files
+.DS_Store
+Thumbs.db
