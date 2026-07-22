@@ -1,0 +1,14 @@
+# Build & Publish Outputs
+[Bb]in/
+[Oo]bj/
+*.zip
+
+# User / IDE Specific Settings
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Operating System Files
+.DS_Store
+Thumbs.db

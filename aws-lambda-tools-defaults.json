@@ -1,0 +1,13 @@
+{
+  "Information": [
+    "This file sets default options for the dotnet lambda CLI."
+  ],
+  "profile": "default",
+  "region": "us-east-1",
+  "configuration": "Release",
+  "function-architecture": "arm64",
+  "function-runtime": "dotnet10",
+  "function-memory-size": 512,
+  "function-timeout": 30,
+  "function-handler": "ClientOnboardingLambda::ClientOnboardingLambda.Function::FunctionHandler"
+}
