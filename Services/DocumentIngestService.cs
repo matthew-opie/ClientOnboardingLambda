@@ -7,6 +7,8 @@ using UglyToad.PdfPig;
 
 namespace ClientOnboardingLambda.Services;
 
+public sealed record IngestSummary(int PdfCount, int ChildChunkCount, string Message);
+
 public sealed class DocumentIngestService(
     AppConfig config,
     IAmazonS3 s3,
@@ -14,7 +16,7 @@ public sealed class DocumentIngestService(
     QdrantClient qdrant,
     OpenAiService openAi)
 {
-    public async Task<string> IngestTenantAsync(TenantInfo tenant, CancellationToken cancellationToken = default)
+    public async Task<IngestSummary> IngestTenantAsync(TenantInfo tenant, CancellationToken cancellationToken = default)
     {
         config.ValidateForIngest();
 
@@ -28,10 +30,10 @@ public sealed class DocumentIngestService(
         await dynamoDb.DeleteTenantDataAsync(tenant.PartitionKey, cancellationToken);
         await dynamoDb.PutItemAsync(tenant.PartitionKey, "META", new Dictionary<string, AttributeValue>
         {
-            ["tenantId"] = new AttributeValue(tenant.TenantId),
-            ["name"] = new AttributeValue(tenant.Name),
-            ["displayId"] = new AttributeValue(tenant.DisplayId),
-            ["qdrantCollection"] = new AttributeValue(tenant.QdrantCollection)
+            ["tenantId"] = new (tenant.TenantId),
+            ["name"] = new (tenant.Name),
+            ["displayId"] = new (tenant.DisplayId),
+            ["qdrantCollection"] = new (tenant.QdrantCollection)
         }, cancellationToken);
 
         var metadataKey = objects.FirstOrDefault(k => k.EndsWith("tenant_metadata.json", StringComparison.OrdinalIgnoreCase));
@@ -47,16 +49,16 @@ public sealed class DocumentIngestService(
 
         foreach (var pdfKey in pdfKeys)
         {
-            var text = await ExtractPdfTextAsync(pdfKey, cancellationToken);
-            if (string.IsNullOrWhiteSpace(text))
+            var pages = await ExtractPdfPagesAsync(pdfKey, cancellationToken);
+            if (pages.Count == 0)
             {
                 continue;
             }
 
             var documentId = Path.GetFileNameWithoutExtension(pdfKey);
             var sectionTitle = InferSectionTitle(documentId);
-            var parents = TextChunker.CreateParents(documentId, text);
-            var children = TextChunker.CreateChildren(documentId, parents);
+            var parents = TextChunker.CreateParents(documentId, pages);
+            var children = TextChunker.CreateChildren(parents);
             totalChildren += children.Count;
 
             await dynamoDb.PutItemAsync(tenant.PartitionKey, $"DOC#{documentId}", new Dictionary<string, AttributeValue>
@@ -68,7 +70,7 @@ public sealed class DocumentIngestService(
 
             var ddbItems = new List<Dictionary<string, AttributeValue>>();
 
-            foreach (var (parentId, parentText) in parents)
+            foreach (var (parentId, parentText, pageNumber) in parents)
             {
                 ddbItems.Add(new Dictionary<string, AttributeValue>
                 {
@@ -77,11 +79,12 @@ public sealed class DocumentIngestService(
                     ["parentId"] = new (parentId),
                     ["documentId"] = new (documentId),
                     ["sectionTitle"] = new (sectionTitle),
-                    ["text"] = new (parentText)
+                    ["text"] = new (parentText),
+                    ["pageNumber"] = new AttributeValue { N = pageNumber.ToString() }
                 });
             }
 
-            foreach (var (childId, parentId, childText) in children)
+            foreach (var (childId, parentId, childText, pageNumber) in children)
             {
                 ddbItems.Add(new Dictionary<string, AttributeValue>
                 {
@@ -90,7 +93,8 @@ public sealed class DocumentIngestService(
                     ["childId"] = new (childId),
                     ["parentId"] = new (parentId),
                     ["documentId"] = new (documentId),
-                    ["text"] = new (childText)
+                    ["text"] = new (childText),
+                    ["pageNumber"] = new AttributeValue { N = pageNumber.ToString() }
                 });
             }
 
@@ -101,7 +105,7 @@ public sealed class DocumentIngestService(
 
             for (var i = 0; i < children.Count; i++)
             {
-                var (childId, parentId, _) = children[i];
+                var (childId, parentId, _, _) = children[i];
                 qdrantPoints.Add(new QdrantPoint
                 {
                     Id = Guid.NewGuid(),
@@ -119,7 +123,10 @@ public sealed class DocumentIngestService(
 
         await qdrant.UpsertPointsAsync(tenant.QdrantCollection, qdrantPoints, cancellationToken);
 
-        return $"Ingested {pdfKeys.Count} PDF(s), {totalChildren} child chunks into {tenant.QdrantCollection}.";
+        return new IngestSummary(
+            pdfKeys.Count,
+            totalChildren,
+            $"Ingested {pdfKeys.Count} PDF(s), {totalChildren} child chunks into {tenant.QdrantCollection}.");
     }
 
     private async Task SeedMetadataAsync(TenantInfo tenant, string metadataJson, CancellationToken cancellationToken)
@@ -180,7 +187,7 @@ public sealed class DocumentIngestService(
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
-    private async Task<string> ExtractPdfTextAsync(string key, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<(int PageNumber, string Text)>> ExtractPdfPagesAsync(string key, CancellationToken cancellationToken)
     {
         using var response = await s3.GetObjectAsync(config.SeedBucketName, key, cancellationToken);
         using var ms = new MemoryStream();
@@ -188,26 +195,21 @@ public sealed class DocumentIngestService(
         ms.Position = 0;
 
         using var document = PdfDocument.Open(ms);
-        return string.Join(' ', document.GetPages().SelectMany(p => p.GetWords()).Select(w => w.Text));
+        return document.GetPages()
+            .Select(page => (page.Number, string.Join(' ', page.GetWords().Select(word => word.Text))))
+            .Where(page => !string.IsNullOrWhiteSpace(page.Item2))
+            .ToList();
     }
 
-    private static string InferSectionTitle(string documentId)
-    {
-        if (documentId.Contains("IMA", StringComparison.OrdinalIgnoreCase))
+    private static string InferSectionTitle(string documentId) =>
+        documentId switch
         {
-            return "Investment Management Agreement";
-        }
-
-        if (documentId.Contains("KYC", StringComparison.OrdinalIgnoreCase))
-        {
-            return "KYC & AML Due Diligence";
-        }
-
-        if (documentId.Contains("Side_Letter", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Side Letter — Restricted Securities";
-        }
-
-        return "Institutional Policy Document";
-    }
+            var id when id.Contains("IMA", StringComparison.OrdinalIgnoreCase) =>
+                "Investment Management Agreement",
+            var id when id.Contains("KYC", StringComparison.OrdinalIgnoreCase) =>
+                "KYC & AML Due Diligence",
+            var id when id.Contains("Side_Letter", StringComparison.OrdinalIgnoreCase) =>
+                "Side Letter — Restricted Securities",
+            _ => "Institutional Policy Document"
+        };
 }

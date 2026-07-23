@@ -1,0 +1,4 @@
+[
+  { "question": "What is the maximum position size?", "expected_contains": ["3.5", "3.5%"] },
+  { "question": "Is BABA restricted?", "expected_contains": ["restrict", "BABA"] }
+]

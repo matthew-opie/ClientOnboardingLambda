@@ -8,6 +8,6 @@
   "function-architecture": "arm64",
   "function-runtime": "dotnet10",
   "function-memory-size": 1024,
-  "function-timeout": 60,
+  "function-timeout": 120,
   "function-handler": "ClientOnboardingLambda::ClientOnboardingLambda.Function::FunctionHandler"
 }

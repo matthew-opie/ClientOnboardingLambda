@@ -37,9 +37,9 @@ public static class TenantRegistry
             ToPartitionKey(number));
     }
 
-    public static string ToFolderId(int number) => $"tenant_{number:D3}";
+    private static string ToFolderId(int number) => $"tenant_{number:D3}";
 
-    public static string ToDisplayId(int number) => $"Tenant_{number:D3}";
+    private static string ToDisplayId(int number) => $"Tenant_{number:D3}";
 
-    public static string ToPartitionKey(int number) => $"TENANT#{number:D3}";
+    private static string ToPartitionKey(int number) => $"TENANT#{number:D3}";
 }

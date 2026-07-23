@@ -17,36 +17,74 @@ public static class TextChunker
             return [];
         }
 
-        var parents = new List<(string, string)>();
-        var index = 0;
+        return CreateParents(documentId, [(1, normalized)])
+            .Select(p => (p.ParentId, p.Text))
+            .ToList();
+    }
+
+    public static IReadOnlyList<(string ParentId, string Text, int PageNumber)> CreateParents(
+        string documentId,
+        IReadOnlyList<(int PageNumber, string Text)> pages)
+    {
+        var parents = new List<(string ParentId, string Text, int PageNumber)>();
+        var buffer = string.Empty;
+        var bufferStartPage = 1;
         var part = 0;
 
-        while (index < normalized.Length)
+        foreach (var (pageNumber, pageText) in pages)
         {
-            var length = Math.Min(ParentChars, normalized.Length - index);
-            var slice = normalized.Substring(index, length).Trim();
-            if (slice.Length > 0)
+            var normalized = Normalize(pageText);
+            if (string.IsNullOrWhiteSpace(normalized))
             {
-                parents.Add(($"{documentId}-p{part:D3}", slice));
-                part++;
+                continue;
             }
 
-            if (index + length >= normalized.Length)
+            if (string.IsNullOrEmpty(buffer))
             {
-                break;
+                bufferStartPage = pageNumber;
             }
 
-            index += length;
+            var combined = string.IsNullOrEmpty(buffer) ? normalized : $"{buffer} {normalized}";
+
+            while (combined.Length >= ParentChars)
+            {
+                var slice = combined[..ParentChars].Trim();
+                if (slice.Length > 0)
+                {
+                    parents.Add(($"{documentId}-p{part:D3}", slice, bufferStartPage));
+                    part++;
+                }
+
+                combined = combined[ParentChars..].TrimStart();
+                bufferStartPage = pageNumber;
+            }
+
+            buffer = combined;
+        }
+
+        if (!string.IsNullOrWhiteSpace(buffer))
+        {
+            parents.Add(($"{documentId}-p{part:D3}", buffer.Trim(), bufferStartPage));
         }
 
         return parents;
     }
 
-    public static IReadOnlyList<(string ChildId, string ParentId, string Text)> CreateChildren(string documentId, IReadOnlyList<(string ParentId, string Text)> parents)
+    public static IReadOnlyList<(string ChildId, string ParentId, string Text)> CreateChildren(
+        string documentId,
+        IReadOnlyList<(string ParentId, string Text)> parents)
     {
-        var children = new List<(string, string, string)>();
+        return CreateChildren(parents.Select(p => (p.ParentId, p.Text, 1)).ToList())
+            .Select(c => (c.ChildId, c.ParentId, c.Text))
+            .ToList();
+    }
 
-        foreach (var (parentId, parentText) in parents)
+    public static IReadOnlyList<(string ChildId, string ParentId, string Text, int PageNumber)> CreateChildren(
+        IReadOnlyList<(string ParentId, string Text, int PageNumber)> parents)
+    {
+        var children = new List<(string ChildId, string ParentId, string Text, int PageNumber)>();
+
+        foreach (var (parentId, parentText, pageNumber) in parents)
         {
             var index = 0;
             var childIndex = 0;
@@ -57,7 +95,7 @@ public static class TextChunker
                 var slice = parentText.Substring(index, length).Trim();
                 if (slice.Length > 0)
                 {
-                    children.Add(($"{parentId}-c{childIndex:D3}", parentId, slice));
+                    children.Add(($"{parentId}-c{childIndex:D3}", parentId, slice, pageNumber));
                     childIndex++;
                 }
 
@@ -162,7 +200,7 @@ public static class Bm25Scorer
 
 public sealed class HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantClient qdrant, OpenAiService openAi)
 {
-    public async Task<(RetrievedChunkResult Chunk, double VectorMs, double DynamoMs, double RerankMs, int RetrievedCount)> RetrieveAsync(
+    public async Task<(IReadOnlyList<RetrievedChunkResult> Chunks, double VectorMs, double DynamoMs, double RerankMs, int RetrievedCount)> RetrieveAsync(
         TenantInfo tenant,
         string query,
         CancellationToken cancellationToken = default)
@@ -183,28 +221,62 @@ public sealed class HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantCl
 
         var rerankSw = System.Diagnostics.Stopwatch.StartNew();
         var bm25Hits = Bm25Scorer.Score(childChunks, query, topK: 8);
-        var fused = FuseResults(bm25Hits, denseHits);
+        var fused = HybridRetrievalFusion.FuseResults(bm25Hits, denseHits);
         rerankSw.Stop();
 
-        var top = fused.First();
-        var parent = await dynamoDb.GetParentChunkAsync(tenant.PartitionKey, top.ParentId, cancellationToken)
-                     ?? throw new InvalidOperationException($"Parent chunk {top.ParentId} not found.");
+        var parentHits = HybridRetrievalFusion.SelectParentHits(fused);
+        var chunks = new List<RetrievedChunkResult>();
 
-        var chunk = new RetrievedChunkResult
+        foreach (var hit in parentHits)
         {
-            DocumentId = parent.DocumentId,
-            SectionTitle = parent.SectionTitle,
-            Content = parent.Text,
-            PrimaryMethod = top.PrimaryMethod,
-            HybridReranked = top.HybridReranked,
-            ParentChunkTokenSize = TextChunker.EstimateTokens(parent.Text),
-            RelevanceScore = Math.Round(top.Score, 2)
-        };
+            var parent = await dynamoDb.GetParentChunkAsync(tenant.PartitionKey, hit.ParentId, cancellationToken)
+                         ?? throw new InvalidOperationException($"Parent chunk {hit.ParentId} not found.");
 
-        return (chunk, vectorSw.Elapsed.TotalMilliseconds, dynamoSw.Elapsed.TotalMilliseconds, rerankSw.Elapsed.TotalMilliseconds, fused.Count);
+            chunks.Add(new RetrievedChunkResult
+            {
+                DocumentId = parent.DocumentId,
+                SectionTitle = parent.SectionTitle,
+                Content = parent.Text,
+                PrimaryMethod = hit.PrimaryMethod,
+                HybridReranked = hit.HybridReranked,
+                ParentChunkTokenSize = TextChunker.EstimateTokens(parent.Text),
+                RelevanceScore = Math.Round(hit.Score, 2),
+                PageNumber = parent.PageNumber
+            });
+        }
+
+        return (chunks, vectorSw.Elapsed.TotalMilliseconds, dynamoSw.Elapsed.TotalMilliseconds, rerankSw.Elapsed.TotalMilliseconds, chunks.Count);
+    }
+}
+
+/// <summary>
+/// Reciprocal rank fusion (RRF) and parent-chunk selection for hybrid retrieval.
+/// Top 3 fused child hits are deduplicated to at most 2 distinct parent chunks for the LLM context window.
+/// </summary>
+internal static class HybridRetrievalFusion
+{
+    internal static List<FusedHit> SelectParentHits(IReadOnlyList<FusedHit> fused)
+    {
+        var parentHits = new List<FusedHit>();
+        var seenParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var hit in fused.Take(3))
+        {
+            if (seenParents.Add(hit.ParentId))
+            {
+                parentHits.Add(hit);
+            }
+
+            if (parentHits.Count >= 2)
+            {
+                break;
+            }
+        }
+
+        return parentHits;
     }
 
-    private static List<FusedHit> FuseResults(
+    internal static List<FusedHit> FuseResults(
         IReadOnlyList<(ChildChunkRecord Chunk, double Score)> bm25Hits,
         IReadOnlyList<QdrantSearchHit> denseHits)
     {
@@ -253,18 +325,19 @@ public sealed class HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantCl
             scores[key] = fused;
         }
 
-        return scores.Values
-            .OrderByDescending(v => v.Score)
-            .Take(5)
-            .ToList();
+        return
+        [
+            .. scores.Values
+                .OrderByDescending(v => v.Score)
+        ];
     }
+}
 
-    private sealed class FusedHit(string parentId, string documentId, string primaryMethod, bool hybridReranked, double score)
-    {
-        public string ParentId { get; } = parentId;
-        public string DocumentId { get; } = documentId;
-        public string PrimaryMethod { get; set; } = primaryMethod;
-        public bool HybridReranked { get; set; } = hybridReranked;
-        public double Score { get; set; } = score;
-    }
+internal sealed class FusedHit(string parentId, string documentId, string primaryMethod, bool hybridReranked, double score)
+{
+    public string ParentId { get; } = parentId;
+    public string DocumentId { get; } = documentId;
+    public string PrimaryMethod { get; set; } = primaryMethod;
+    public bool HybridReranked { get; set; } = hybridReranked;
+    public double Score { get; set; } = score;
 }

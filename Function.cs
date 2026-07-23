@@ -1,7 +1,5 @@
-using System.Text.Json.Serialization;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
-using ClientOnboardingLambda.Models;
 using ClientOnboardingLambda.Services;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
@@ -10,20 +8,29 @@ namespace ClientOnboardingLambda;
 
 public class Function
 {
-    public async Task<APIGatewayHttpApiV2ProxyResponse> FunctionHandler(
+    public async Task FunctionHandler(
         APIGatewayHttpApiV2ProxyRequest request,
         ILambdaContext context)
     {
-        context.Logger.LogInformation($"Route: {request.RequestContext.Http.Method} {request.RawPath}");
-
         var config = AppConfig.Load();
         var router = RequestRouter.Create(config);
-        return await router.RouteAsync(request, context.Logger, CancellationToken.None);
+
+        if (IsStreamQueryRoute(request))
+        {
+            await router.RouteStreamAsync(request, context, CancellationToken.None);
+            return;
+        }
+
+        var response = await router.RouteAsync(request, context.Logger, CancellationToken.None);
+        await HttpResponseStreamWriter.WriteAsync(response, CancellationToken.None);
+    }
+
+    private static bool IsStreamQueryRoute(APIGatewayHttpApiV2ProxyRequest request)
+    {
+        var method = request.RequestContext.Http.Method?.ToUpperInvariant() ?? "GET";
+        var path = request.RawPath?.TrimEnd('/') ?? "/";
+        return method == "POST" &&
+               path.StartsWith("/tenants/", StringComparison.OrdinalIgnoreCase) &&
+               path.EndsWith("/query/stream", StringComparison.OrdinalIgnoreCase);
     }
 }
-
-[JsonSerializable(typeof(PromptRequest))]
-[JsonSerializable(typeof(QueryRequest))]
-[JsonSerializable(typeof(ApiResponse))]
-[JsonSerializable(typeof(TenantListItemDto))]
-public partial class LambdaJsonContext : JsonSerializerContext;

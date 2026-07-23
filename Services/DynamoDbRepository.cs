@@ -34,6 +34,45 @@ public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
         }
     }
 
+    public async Task<EvalStatusDto?> GetEvalStatusAsync(string partitionKey, CancellationToken cancellationToken = default)
+    {
+        var item = await GetItemAsync(partitionKey, "EVAL#latest", cancellationToken);
+        if (item is null)
+        {
+            return null;
+        }
+
+        return new EvalStatusDto
+        {
+            Status = item.TryGetValue("status", out var status) ? status.S : "unknown",
+            RunAt = ParseOptionalDateTime(item, "runAt"),
+            Faithfulness = ParseOptionalDouble(item, "faithfulness"),
+            QuestionCount = ParseOptionalInt(item, "questionCount"),
+            Error = item.TryGetValue("error", out var error) ? error.S : null,
+            TenantId = item.TryGetValue("tenantId", out var tenantId) ? tenantId.S : null
+        };
+    }
+
+    public async Task<IngestStatusDto?> GetIngestStatusAsync(string partitionKey, CancellationToken cancellationToken = default)
+    {
+        var item = await GetItemAsync(partitionKey, "INGEST#latest", cancellationToken);
+        if (item is null)
+        {
+            return null;
+        }
+
+        return new IngestStatusDto
+        {
+            Status = item.TryGetValue("status", out var status) ? status.S : "unknown",
+            StartedAt = ParseOptionalDateTime(item, "startedAt"),
+            CompletedAt = ParseOptionalDateTime(item, "completedAt"),
+            PdfCount = ParseOptionalInt(item, "pdfCount"),
+            ChunkCount = ParseOptionalInt(item, "chunkCount"),
+            Error = item.TryGetValue("error", out var error) ? error.S : null,
+            TenantId = item.TryGetValue("tenantId", out var tenantId) ? tenantId.S : null
+        };
+    }
+
     public async Task<Dictionary<string, AttributeValue>?> GetItemAsync(string pk, string sk, CancellationToken cancellationToken = default)
     {
         var response = await client.GetItemAsync(new GetItemRequest
@@ -41,8 +80,8 @@ public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
             TableName = tableName,
             Key = new Dictionary<string, AttributeValue>
             {
-                ["PK"] = new AttributeValue(pk),
-                ["SK"] = new AttributeValue(sk)
+                ["PK"] = new (pk),
+                ["SK"] = new (sk)
             }
         }, cancellationToken);
 
@@ -62,8 +101,8 @@ public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
                 KeyConditionExpression = "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues = new Dictionary<string, AttributeValue>
                 {
-                    [":pk"] = new AttributeValue(partitionKey),
-                    [":sk"] = new AttributeValue("CHILD#")
+                    [":pk"] = new (partitionKey),
+                    [":sk"] = new ("CHILD#")
                 },
                 ExclusiveStartKey = lastKey
             }, cancellationToken);
@@ -98,7 +137,10 @@ public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
             ParentId = parentId,
             DocumentId = item.TryGetValue("documentId", out var doc) ? doc.S : string.Empty,
             SectionTitle = item.TryGetValue("sectionTitle", out var title) ? title.S : "Retrieved Context",
-            Text = item.TryGetValue("text", out var text) ? text.S : string.Empty
+            Text = item.TryGetValue("text", out var text) ? text.S : string.Empty,
+            PageNumber = item.TryGetValue("pageNumber", out var page) && int.TryParse(page.N, out var parsedPage)
+                ? parsedPage
+                : 0
         };
     }
 
@@ -139,15 +181,33 @@ public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
                 })
                 .ToList();
 
-            await client.BatchWriteItemAsync(new BatchWriteItemRequest
+            foreach (var batch in deleteRequests.Chunk(25))
             {
-                RequestItems = new Dictionary<string, List<WriteRequest>>
+                await client.BatchWriteItemAsync(new BatchWriteItemRequest
                 {
-                    [tableName] = deleteRequests
-                }
-            }, cancellationToken);
+                    RequestItems = new Dictionary<string, List<WriteRequest>>
+                    {
+                        [tableName] = batch.ToList()
+                    }
+                }, cancellationToken);
+            }
 
             lastKey = response.LastEvaluatedKey?.Count > 0 ? response.LastEvaluatedKey : null;
         } while (lastKey is not null);
     }
+
+    private static DateTime? ParseOptionalDateTime(Dictionary<string, AttributeValue> item, string key) =>
+        item.TryGetValue(key, out var value) && DateTime.TryParse(value.S, out var parsed)
+            ? parsed
+            : null;
+
+    private static int? ParseOptionalInt(Dictionary<string, AttributeValue> item, string key) =>
+        item.TryGetValue(key, out var value) && int.TryParse(value.N, out var parsed)
+            ? parsed
+            : null;
+
+    private static double? ParseOptionalDouble(Dictionary<string, AttributeValue> item, string key) =>
+        item.TryGetValue(key, out var value) && double.TryParse(value.N, out var parsed)
+            ? parsed
+            : null;
 }

@@ -49,6 +49,112 @@ public sealed class OpenAiService(string apiKey)
         return await ChatAsync(legacySystem, userPrompt, cancellationToken);
     }
 
+    public async IAsyncEnumerable<string> ChatStreamAsync(
+        string systemPrompt,
+        string userPrompt,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var payload = new
+        {
+            model = ChatModel,
+            stream = true,
+            messages = new object[]
+            {
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = userPrompt }
+            }
+        };
+
+        using var request = CreateRequest(ChatUrl, payload);
+        using var response = await HttpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"OpenAI chat stream failed ({(int)response.StatusCode}): {body}");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                yield break;
+            }
+
+            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var data = line["data: ".Length..];
+            if (data == "[DONE]")
+            {
+                yield break;
+            }
+
+            ChatStreamChunk? chunk;
+            try
+            {
+                chunk = JsonSerializer.Deserialize<ChatStreamChunk>(data, JsonOptions);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            var delta = chunk?.Choices?.FirstOrDefault()?.Delta?.Content;
+            if (!string.IsNullOrEmpty(delta))
+            {
+                yield return delta;
+            }
+        }
+    }
+
+    public async Task<double> ScoreFaithfulnessAsync(
+        string question,
+        string answer,
+        string context,
+        CancellationToken cancellationToken = default)
+    {
+        const string systemPrompt =
+            "You are a RAGAS faithfulness evaluator. Given a question, retrieved context, and generated answer, " +
+            "score how well the answer is grounded in the context from 0.0 to 1.0. " +
+            "1.0 means every factual claim in the answer is directly supported by the context. " +
+            "0.0 means the answer contradicts or ignores the context. " +
+            "Respond with ONLY a decimal number between 0 and 1, with up to two decimal places.";
+
+        var userPrompt =
+            $"Question:\n{question}\n\nContext:\n{context}\n\nAnswer:\n{answer}\n\nFaithfulness score:";
+
+        var raw = await ChatAsync(systemPrompt, userPrompt, cancellationToken);
+        return ParseScore(raw);
+    }
+
+    private static double ParseScore(string raw)
+    {
+        var trimmed = raw.Trim();
+        if (double.TryParse(trimmed, out var score))
+        {
+            return Math.Round(Math.Clamp(score, 0, 1), 4);
+        }
+
+        var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"0\.\d+|1\.0|1|0");
+        if (match.Success && double.TryParse(match.Value, out score))
+        {
+            return Math.Round(Math.Clamp(score, 0, 1), 4);
+        }
+
+        throw new InvalidOperationException($"Could not parse faithfulness score from OpenAI response: {raw}");
+    }
+
     public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
     {
         var payload = new { model = EmbeddingModel, input = text };
@@ -120,6 +226,18 @@ public sealed class OpenAiService(string apiKey)
     {
         [JsonPropertyName("content")]
         public string? Content { get; set; }
+    }
+
+    private sealed class ChatStreamChunk
+    {
+        [JsonPropertyName("choices")]
+        public List<ChatStreamChoice>? Choices { get; set; }
+    }
+
+    private sealed class ChatStreamChoice
+    {
+        [JsonPropertyName("delta")]
+        public ChatMessageBody? Delta { get; set; }
     }
 
     private sealed class EmbeddingResponse

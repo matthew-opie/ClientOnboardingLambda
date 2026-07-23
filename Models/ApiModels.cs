@@ -33,6 +33,10 @@ public sealed class ApiResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ContextDto? Context { get; set; }
 
+    [JsonPropertyName("contexts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ContextDto>? Contexts { get; set; }
+
     [JsonPropertyName("telemetry")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TelemetryDto? Telemetry { get; set; }
@@ -81,6 +85,9 @@ public sealed class ContextDto
 
     [JsonPropertyName("relevanceScore")]
     public double RelevanceScore { get; set; }
+
+    [JsonPropertyName("page")]
+    public int Page { get; set; }
 }
 
 public sealed class TelemetryDto
@@ -102,6 +109,62 @@ public sealed class TelemetryDto
 
     [JsonPropertyName("retrievedChunks")]
     public int RetrievedChunks { get; set; }
+}
+
+public sealed class EvalStatusDto
+{
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "unknown";
+
+    [JsonPropertyName("runAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? RunAt { get; set; }
+
+    [JsonPropertyName("faithfulness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Faithfulness { get; set; }
+
+    [JsonPropertyName("questionCount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? QuestionCount { get; set; }
+
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+
+    [JsonPropertyName("tenantId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TenantId { get; set; }
+}
+
+public sealed class IngestStatusDto
+{
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "unknown";
+
+    [JsonPropertyName("startedAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? StartedAt { get; set; }
+
+    [JsonPropertyName("completedAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? CompletedAt { get; set; }
+
+    [JsonPropertyName("pdfCount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PdfCount { get; set; }
+
+    [JsonPropertyName("chunkCount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ChunkCount { get; set; }
+
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+
+    [JsonPropertyName("tenantId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TenantId { get; set; }
 }
 
 public sealed class TenantListItemDto
@@ -152,6 +215,7 @@ public sealed class RetrievedChunkResult
     public bool HybridReranked { get; init; }
     public int ParentChunkTokenSize { get; init; }
     public double RelevanceScore { get; init; }
+    public int PageNumber { get; init; }
 }
 
 public sealed class ChildChunkRecord
@@ -168,6 +232,7 @@ public sealed class ParentChunkRecord
     public required string DocumentId { get; init; }
     public required string SectionTitle { get; init; }
     public required string Text { get; init; }
+    public int PageNumber { get; init; }
 }
 
 public enum RetrievalMethodKind
