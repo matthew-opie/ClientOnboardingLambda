@@ -160,26 +160,15 @@ public static class Bm25Scorer
     }
 }
 
-public sealed class HybridRetrievalService
+public sealed class HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantClient qdrant, OpenAiService openAi)
 {
-    private readonly DynamoDbRepository _dynamoDb;
-    private readonly QdrantClient _qdrant;
-    private readonly OpenAiService _openAi;
-
-    public HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantClient qdrant, OpenAiService openAi)
-    {
-        _dynamoDb = dynamoDb;
-        _qdrant = qdrant;
-        _openAi = openAi;
-    }
-
     public async Task<(RetrievedChunkResult Chunk, double VectorMs, double DynamoMs, double RerankMs, int RetrievedCount)> RetrieveAsync(
         TenantInfo tenant,
         string query,
         CancellationToken cancellationToken = default)
     {
         var dynamoSw = System.Diagnostics.Stopwatch.StartNew();
-        var childChunks = await _dynamoDb.GetChildChunksAsync(tenant.PartitionKey, cancellationToken);
+        var childChunks = await dynamoDb.GetChildChunksAsync(tenant.PartitionKey, cancellationToken);
         dynamoSw.Stop();
 
         if (childChunks.Count == 0)
@@ -188,8 +177,8 @@ public sealed class HybridRetrievalService
         }
 
         var vectorSw = System.Diagnostics.Stopwatch.StartNew();
-        var queryVector = await _openAi.EmbedAsync(query, cancellationToken);
-        var denseHits = await _qdrant.SearchAsync(tenant.QdrantCollection, queryVector, limit: 8, cancellationToken);
+        var queryVector = await openAi.EmbedAsync(query, cancellationToken);
+        var denseHits = await qdrant.SearchAsync(tenant.QdrantCollection, queryVector, limit: 8, cancellationToken);
         vectorSw.Stop();
 
         var rerankSw = System.Diagnostics.Stopwatch.StartNew();
@@ -198,7 +187,7 @@ public sealed class HybridRetrievalService
         rerankSw.Stop();
 
         var top = fused.First();
-        var parent = await _dynamoDb.GetParentChunkAsync(tenant.PartitionKey, top.ParentId, cancellationToken)
+        var parent = await dynamoDb.GetParentChunkAsync(tenant.PartitionKey, top.ParentId, cancellationToken)
                      ?? throw new InvalidOperationException($"Parent chunk {top.ParentId} not found.");
 
         var chunk = new RetrievedChunkResult

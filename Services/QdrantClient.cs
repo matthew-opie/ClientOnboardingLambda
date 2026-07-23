@@ -5,19 +5,12 @@ using System.Text.Json.Serialization;
 
 namespace ClientOnboardingLambda.Services;
 
-public sealed class QdrantClient
+public sealed class QdrantClient(string baseUrl, string apiKey)
 {
     private static readonly HttpClient HttpClient = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    private readonly string _baseUrl;
-    private readonly string _apiKey;
-
-    public QdrantClient(string baseUrl, string apiKey)
-    {
-        _baseUrl = baseUrl.TrimEnd('/');
-        _apiKey = apiKey;
-    }
+    private readonly string _baseUrl = baseUrl.TrimEnd('/');
 
     public async Task UpsertPointsAsync(string collection, IReadOnlyList<QdrantPoint> points, CancellationToken cancellationToken = default)
     {
@@ -117,7 +110,7 @@ public sealed class QdrantClient
         {
             Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
         };
-        request.Headers.Add("api-key", _apiKey);
+        request.Headers.Add("api-key", apiKey);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return request;
     }

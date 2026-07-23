@@ -4,25 +4,16 @@ using ClientOnboardingLambda.Models;
 
 namespace ClientOnboardingLambda.Services;
 
-public sealed class DynamoDbRepository
+public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
 {
-    private readonly IAmazonDynamoDB _client;
-    private readonly string _tableName;
-
-    public DynamoDbRepository(IAmazonDynamoDB client, string tableName)
-    {
-        _client = client;
-        _tableName = tableName;
-    }
-
     public async Task PutItemAsync(string pk, string sk, Dictionary<string, AttributeValue> attributes, CancellationToken cancellationToken = default)
     {
         attributes["PK"] = new AttributeValue(pk);
         attributes["SK"] = new AttributeValue(sk);
 
-        await _client.PutItemAsync(new PutItemRequest
+        await client.PutItemAsync(new PutItemRequest
         {
-            TableName = _tableName,
+            TableName = tableName,
             Item = attributes
         }, cancellationToken);
     }
@@ -35,19 +26,19 @@ public sealed class DynamoDbRepository
             {
                 RequestItems = new Dictionary<string, List<WriteRequest>>
                 {
-                    [_tableName] = batch.Select(item => new WriteRequest { PutRequest = new PutRequest { Item = item } }).ToList()
+                    [tableName] = batch.Select(item => new WriteRequest { PutRequest = new PutRequest { Item = item } }).ToList()
                 }
             };
 
-            await _client.BatchWriteItemAsync(request, cancellationToken);
+            await client.BatchWriteItemAsync(request, cancellationToken);
         }
     }
 
     public async Task<Dictionary<string, AttributeValue>?> GetItemAsync(string pk, string sk, CancellationToken cancellationToken = default)
     {
-        var response = await _client.GetItemAsync(new GetItemRequest
+        var response = await client.GetItemAsync(new GetItemRequest
         {
-            TableName = _tableName,
+            TableName = tableName,
             Key = new Dictionary<string, AttributeValue>
             {
                 ["PK"] = new AttributeValue(pk),
@@ -65,9 +56,9 @@ public sealed class DynamoDbRepository
 
         do
         {
-            var response = await _client.QueryAsync(new Amazon.DynamoDBv2.Model.QueryRequest
+            var response = await client.QueryAsync(new Amazon.DynamoDBv2.Model.QueryRequest
             {
-                TableName = _tableName,
+                TableName = tableName,
                 KeyConditionExpression = "PK = :pk AND begins_with(SK, :sk)",
                 ExpressionAttributeValues = new Dictionary<string, AttributeValue>
                 {
@@ -117,9 +108,9 @@ public sealed class DynamoDbRepository
 
         do
         {
-            var response = await _client.QueryAsync(new Amazon.DynamoDBv2.Model.QueryRequest
+            var response = await client.QueryAsync(new Amazon.DynamoDBv2.Model.QueryRequest
             {
-                TableName = _tableName,
+                TableName = tableName,
                 KeyConditionExpression = "PK = :pk",
                 ExpressionAttributeValues = new Dictionary<string, AttributeValue>
                 {
@@ -148,11 +139,11 @@ public sealed class DynamoDbRepository
                 })
                 .ToList();
 
-            await _client.BatchWriteItemAsync(new BatchWriteItemRequest
+            await client.BatchWriteItemAsync(new BatchWriteItemRequest
             {
                 RequestItems = new Dictionary<string, List<WriteRequest>>
                 {
-                    [_tableName] = deleteRequests
+                    [tableName] = deleteRequests
                 }
             }, cancellationToken);
 

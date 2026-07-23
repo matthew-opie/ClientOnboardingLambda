@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 
 namespace ClientOnboardingLambda.Services;
 
-public sealed class OpenAiService
+public sealed class OpenAiService(string apiKey)
 {
     private const string ChatUrl = "https://api.openai.com/v1/chat/completions";
     private const string EmbeddingsUrl = "https://api.openai.com/v1/embeddings";
@@ -14,10 +14,6 @@ public sealed class OpenAiService
 
     private static readonly HttpClient HttpClient = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    private readonly string _apiKey;
-
-    public OpenAiService(string apiKey) => _apiKey = apiKey;
 
     public async Task<string> ChatAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
     {
@@ -104,7 +100,7 @@ public sealed class OpenAiService
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         return request;
     }
 

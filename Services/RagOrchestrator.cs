@@ -2,25 +2,14 @@ using ClientOnboardingLambda.Models;
 
 namespace ClientOnboardingLambda.Services;
 
-public sealed class RagOrchestrator
+public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExecutor tools, OpenAiService openAi)
 {
-    private readonly HybridRetrievalService _retrieval;
-    private readonly McpToolExecutor _tools;
-    private readonly OpenAiService _openAi;
-
-    public RagOrchestrator(HybridRetrievalService retrieval, McpToolExecutor tools, OpenAiService openAi)
-    {
-        _retrieval = retrieval;
-        _tools = tools;
-        _openAi = openAi;
-    }
-
     public async Task<ApiResponse> QueryAsync(TenantInfo tenant, string query, CancellationToken cancellationToken = default)
     {
         var (chunk, vectorMs, dynamoMs, rerankMs, retrievedCount) =
-            await _retrieval.RetrieveAsync(tenant, query, cancellationToken);
+            await retrieval.RetrieveAsync(tenant, query, cancellationToken);
 
-        var toolLogs = await _tools.ExecuteAsync(tenant, query, retrievedCount, vectorMs, cancellationToken);
+        var toolLogs = await tools.ExecuteAsync(tenant, query, retrievedCount, vectorMs, cancellationToken);
 
         var systemPrompt =
             "You are a compliance assistant for an institutional onboarding platform. " +
@@ -32,7 +21,7 @@ public sealed class RagOrchestrator
             $"Context from {chunk.DocumentId} — {chunk.SectionTitle}:\n{chunk.Content}\n\n" +
             $"Question: {query}";
 
-        var answer = await _openAi.ChatAsync(systemPrompt, userPrompt, cancellationToken);
+        var answer = await openAi.ChatAsync(systemPrompt, userPrompt, cancellationToken);
         var faithfulness = EstimateFaithfulness(answer, chunk.Content);
 
         return new ApiResponse

@@ -4,12 +4,8 @@ using ClientOnboardingLambda.Models;
 
 namespace ClientOnboardingLambda.Services;
 
-public sealed class McpToolExecutor
+public sealed class McpToolExecutor(DynamoDbRepository dynamoDb)
 {
-    private readonly DynamoDbRepository _dynamoDb;
-
-    public McpToolExecutor(DynamoDbRepository dynamoDb) => _dynamoDb = dynamoDb;
-
     public async Task<List<ToolLogDto>> ExecuteAsync(
         TenantInfo tenant,
         string query,
@@ -110,7 +106,7 @@ public sealed class McpToolExecutor
 
     private async Task<string> VerifyKycAsync(TenantInfo tenant, CancellationToken cancellationToken)
     {
-        var item = await _dynamoDb.GetItemAsync(tenant.PartitionKey, "KYC", cancellationToken);
+        var item = await dynamoDb.GetItemAsync(tenant.PartitionKey, "KYC", cancellationToken);
         if (item is null)
         {
             return JsonSerializer.Serialize(new { status = "UNKNOWN", message = "KYC record not found." });
@@ -127,7 +123,7 @@ public sealed class McpToolExecutor
 
     private async Task<string> CheckTickerAsync(TenantInfo tenant, string ticker, CancellationToken cancellationToken)
     {
-        var item = await _dynamoDb.GetItemAsync(tenant.PartitionKey, $"RESTRICTION#{ticker.ToUpperInvariant()}", cancellationToken);
+        var item = await dynamoDb.GetItemAsync(tenant.PartitionKey, $"RESTRICTION#{ticker.ToUpperInvariant()}", cancellationToken);
         if (item is null)
         {
             return JsonSerializer.Serialize(new

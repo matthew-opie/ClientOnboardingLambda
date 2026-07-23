@@ -7,41 +7,26 @@ using UglyToad.PdfPig;
 
 namespace ClientOnboardingLambda.Services;
 
-public sealed class DocumentIngestService
+public sealed class DocumentIngestService(
+    AppConfig config,
+    IAmazonS3 s3,
+    DynamoDbRepository dynamoDb,
+    QdrantClient qdrant,
+    OpenAiService openAi)
 {
-    private readonly AppConfig _config;
-    private readonly IAmazonS3 _s3;
-    private readonly DynamoDbRepository _dynamoDb;
-    private readonly QdrantClient _qdrant;
-    private readonly OpenAiService _openAi;
-
-    public DocumentIngestService(
-        AppConfig config,
-        IAmazonS3 s3,
-        DynamoDbRepository dynamoDb,
-        QdrantClient qdrant,
-        OpenAiService openAi)
-    {
-        _config = config;
-        _s3 = s3;
-        _dynamoDb = dynamoDb;
-        _qdrant = qdrant;
-        _openAi = openAi;
-    }
-
     public async Task<string> IngestTenantAsync(TenantInfo tenant, CancellationToken cancellationToken = default)
     {
-        _config.ValidateForIngest();
+        config.ValidateForIngest();
 
         var prefix = $"{tenant.TenantId}/";
         var objects = await ListObjectsAsync(prefix, cancellationToken);
         if (objects.Count == 0)
         {
-            throw new InvalidOperationException($"No objects found in s3://{_config.SeedBucketName}/{prefix}");
+            throw new InvalidOperationException($"No objects found in s3://{config.SeedBucketName}/{prefix}");
         }
 
-        await _dynamoDb.DeleteTenantDataAsync(tenant.PartitionKey, cancellationToken);
-        await _dynamoDb.PutItemAsync(tenant.PartitionKey, "META", new Dictionary<string, AttributeValue>
+        await dynamoDb.DeleteTenantDataAsync(tenant.PartitionKey, cancellationToken);
+        await dynamoDb.PutItemAsync(tenant.PartitionKey, "META", new Dictionary<string, AttributeValue>
         {
             ["tenantId"] = new AttributeValue(tenant.TenantId),
             ["name"] = new AttributeValue(tenant.Name),
@@ -74,11 +59,11 @@ public sealed class DocumentIngestService
             var children = TextChunker.CreateChildren(documentId, parents);
             totalChildren += children.Count;
 
-            await _dynamoDb.PutItemAsync(tenant.PartitionKey, $"DOC#{documentId}", new Dictionary<string, AttributeValue>
+            await dynamoDb.PutItemAsync(tenant.PartitionKey, $"DOC#{documentId}", new Dictionary<string, AttributeValue>
             {
-                ["documentId"] = new AttributeValue(documentId),
-                ["s3Key"] = new AttributeValue(pdfKey),
-                ["sectionTitle"] = new AttributeValue(sectionTitle)
+                ["documentId"] = new (documentId),
+                ["s3Key"] = new (pdfKey),
+                ["sectionTitle"] = new (sectionTitle)
             }, cancellationToken);
 
             var ddbItems = new List<Dictionary<string, AttributeValue>>();
@@ -87,12 +72,12 @@ public sealed class DocumentIngestService
             {
                 ddbItems.Add(new Dictionary<string, AttributeValue>
                 {
-                    ["PK"] = new AttributeValue(tenant.PartitionKey),
-                    ["SK"] = new AttributeValue($"PARENT#{parentId}"),
-                    ["parentId"] = new AttributeValue(parentId),
-                    ["documentId"] = new AttributeValue(documentId),
-                    ["sectionTitle"] = new AttributeValue(sectionTitle),
-                    ["text"] = new AttributeValue(parentText)
+                    ["PK"] = new (tenant.PartitionKey),
+                    ["SK"] = new ($"PARENT#{parentId}"),
+                    ["parentId"] = new (parentId),
+                    ["documentId"] = new (documentId),
+                    ["sectionTitle"] = new (sectionTitle),
+                    ["text"] = new (parentText)
                 });
             }
 
@@ -100,19 +85,19 @@ public sealed class DocumentIngestService
             {
                 ddbItems.Add(new Dictionary<string, AttributeValue>
                 {
-                    ["PK"] = new AttributeValue(tenant.PartitionKey),
-                    ["SK"] = new AttributeValue($"CHILD#{childId}"),
-                    ["childId"] = new AttributeValue(childId),
-                    ["parentId"] = new AttributeValue(parentId),
-                    ["documentId"] = new AttributeValue(documentId),
-                    ["text"] = new AttributeValue(childText)
+                    ["PK"] = new (tenant.PartitionKey),
+                    ["SK"] = new ($"CHILD#{childId}"),
+                    ["childId"] = new (childId),
+                    ["parentId"] = new (parentId),
+                    ["documentId"] = new (documentId),
+                    ["text"] = new (childText)
                 });
             }
 
-            await _dynamoDb.BatchWriteAsync(ddbItems, cancellationToken);
+            await dynamoDb.BatchWriteAsync(ddbItems, cancellationToken);
 
             var childTexts = children.Select(c => c.Text).ToList();
-            var embeddings = await _openAi.EmbedBatchAsync(childTexts, cancellationToken);
+            var embeddings = await openAi.EmbedBatchAsync(childTexts, cancellationToken);
 
             for (var i = 0; i < children.Count; i++)
             {
@@ -132,7 +117,7 @@ public sealed class DocumentIngestService
             }
         }
 
-        await _qdrant.UpsertPointsAsync(tenant.QdrantCollection, qdrantPoints, cancellationToken);
+        await qdrant.UpsertPointsAsync(tenant.QdrantCollection, qdrantPoints, cancellationToken);
 
         return $"Ingested {pdfKeys.Count} PDF(s), {totalChildren} child chunks into {tenant.QdrantCollection}.";
     }
@@ -142,12 +127,12 @@ public sealed class DocumentIngestService
         var metadata = JsonSerializer.Deserialize<TenantMetadataJson>(metadataJson)
                        ?? throw new InvalidOperationException("Failed to parse tenant_metadata.json");
 
-        await _dynamoDb.PutItemAsync(tenant.PartitionKey, "KYC", new Dictionary<string, AttributeValue>
+        await dynamoDb.PutItemAsync(tenant.PartitionKey, "KYC", new Dictionary<string, AttributeValue>
         {
-            ["status"] = new AttributeValue("VERIFIED"),
-            ["complianceOfficer"] = new AttributeValue(metadata.ComplianceOfficer),
-            ["lei"] = new AttributeValue(metadata.Lei),
-            ["entityName"] = new AttributeValue(metadata.Name)
+            ["status"] = new ("VERIFIED"),
+            ["complianceOfficer"] = new (metadata.ComplianceOfficer),
+            ["lei"] = new (metadata.Lei),
+            ["entityName"] = new (metadata.Name)
         }, cancellationToken);
 
         foreach (var tickerRow in metadata.ExcludedTickers)
@@ -158,11 +143,11 @@ public sealed class DocumentIngestService
             }
 
             var ticker = tickerRow[0].ToUpperInvariant();
-            await _dynamoDb.PutItemAsync(tenant.PartitionKey, $"RESTRICTION#{ticker}", new Dictionary<string, AttributeValue>
+            await dynamoDb.PutItemAsync(tenant.PartitionKey, $"RESTRICTION#{ticker}", new Dictionary<string, AttributeValue>
             {
-                ["ticker"] = new AttributeValue(ticker),
-                ["company"] = new AttributeValue(tickerRow.Count > 1 ? tickerRow[1] : string.Empty),
-                ["reason"] = new AttributeValue(tickerRow.Count > 2 ? tickerRow[2] : string.Empty)
+                ["ticker"] = new (ticker),
+                ["company"] = new (tickerRow.Count > 1 ? tickerRow[1] : string.Empty),
+                ["reason"] = new (tickerRow.Count > 2 ? tickerRow[2] : string.Empty)
             }, cancellationToken);
         }
     }
@@ -174,9 +159,9 @@ public sealed class DocumentIngestService
 
         do
         {
-            var response = await _s3.ListObjectsV2Async(new ListObjectsV2Request
+            var response = await s3.ListObjectsV2Async(new ListObjectsV2Request
             {
-                BucketName = _config.SeedBucketName,
+                BucketName = config.SeedBucketName,
                 Prefix = prefix,
                 ContinuationToken = token
             }, cancellationToken);
@@ -190,14 +175,14 @@ public sealed class DocumentIngestService
 
     private async Task<string> DownloadTextAsync(string key, CancellationToken cancellationToken)
     {
-        using var response = await _s3.GetObjectAsync(_config.SeedBucketName, key, cancellationToken);
+        using var response = await s3.GetObjectAsync(config.SeedBucketName, key, cancellationToken);
         using var reader = new StreamReader(response.ResponseStream);
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
     private async Task<string> ExtractPdfTextAsync(string key, CancellationToken cancellationToken)
     {
-        using var response = await _s3.GetObjectAsync(_config.SeedBucketName, key, cancellationToken);
+        using var response = await s3.GetObjectAsync(config.SeedBucketName, key, cancellationToken);
         using var ms = new MemoryStream();
         await response.ResponseStream.CopyToAsync(ms, cancellationToken);
         ms.Position = 0;
