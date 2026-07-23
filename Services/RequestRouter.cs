@@ -103,17 +103,10 @@ public sealed class RequestRouter(
         {
             if (method == "OPTIONS")
             {
-                var origin = CorsHeaders.GetOrigin(request);
-                var isStreamPath = path.StartsWith("/tenants/", StringComparison.OrdinalIgnoreCase) &&
-                                   path.EndsWith("/query/stream", StringComparison.OrdinalIgnoreCase);
-                var headers = isStreamPath
-                    ? CorsHeaders.BuildPreflight(origin, config.CorsAllowedOrigins)
-                    : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
                 return new APIGatewayHttpApiV2ProxyResponse
                 {
                     StatusCode = 204,
-                    Headers = headers,
+                    Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                     Body = string.Empty
                 };
             }
@@ -385,7 +378,7 @@ public sealed class RequestRouter(
         var tenantId = path["/tenants/".Length..^"/query/stream".Length];
 
         await using var responseStream = LambdaResponseStreamFactory.CreateHttpStream(
-            SseStreamWriter.CreatePrelude(log.StreamResponseHeaders));
+            SseStreamWriter.CreatePrelude(log.ResponseHeaders));
         var sse = new SseStreamWriter(responseStream);
 
         try

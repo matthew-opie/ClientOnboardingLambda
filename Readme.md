@@ -69,7 +69,7 @@ Async:     S3 → SQS → DocumentIngestLambda
 | `ADMIN_API_KEY` | Admin routes | `x-api-key` header |
 | `MCP_SERVER_URL` | No | Remote MCP server base URL |
 | `MCP_SERVER_API_KEY` | No | Sent as `x-api-key` to MCP server |
-| `CORS_ALLOWED_ORIGINS` | No | Comma-separated browser origins for **SSE streaming** responses (Function URL CORS does not apply to `RESPONSE_STREAM`). Buffered routes (`/health`, `/tenants`, etc.) rely on Function URL CORS only — leave unset to avoid duplicate `Access-Control-Allow-Origin` headers. Example: `https://www.mattopie.com,http://localhost:5156` |
+| `CORS_ALLOWED_ORIGINS` | No | **Deprecated.** CORS is configured on the Lambda Function URL only (including `RESPONSE_STREAM`). Do not set this env var — app-level CORS duplicates Function URL headers and breaks browser requests. |
 
 ## API (summary)
 

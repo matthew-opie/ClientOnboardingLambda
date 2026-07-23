@@ -104,16 +104,6 @@ public sealed class RequestLogContext
             ["x-request-id"] = RequestId
         };
 
-    public Dictionary<string, string> StreamResponseHeaders
-    {
-        get
-        {
-            var headers = CorsHeaders.Build(_origin, _corsAllowedOrigins);
-            headers["x-request-id"] = RequestId;
-            return headers;
-        }
-    }
-
     private static string ResolveRequestId(APIGatewayHttpApiV2ProxyRequest request)
     {
         if (request.Headers is not null)
