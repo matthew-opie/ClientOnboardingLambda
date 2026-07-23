@@ -14,5 +14,8 @@
     <PackageReference Include="Amazon.Lambda.APIGatewayEvents" Version="3.0.0" />
     <PackageReference Include="Amazon.Lambda.Core" Version="2.8.1" />
     <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.5" />
+    <PackageReference Include="AWSSDK.DynamoDBv2" Version="4.0.0" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.0" />
+    <PackageReference Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
   </ItemGroup>
 </Project>

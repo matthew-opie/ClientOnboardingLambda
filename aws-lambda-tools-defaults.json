@@ -7,7 +7,7 @@
   "configuration": "Release",
   "function-architecture": "arm64",
   "function-runtime": "dotnet10",
-  "function-memory-size": 512,
-  "function-timeout": 30,
+  "function-memory-size": 1024,
+  "function-timeout": 60,
   "function-handler": "ClientOnboardingLambda::ClientOnboardingLambda.Function::FunctionHandler"
 }
