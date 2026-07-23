@@ -5,7 +5,9 @@ using ClientOnboardingLambda.Models;
 
 namespace ClientOnboardingLambda.Services;
 
+/// <summary>
 /// Compliance tool implementations shared by the query Lambda (in-process) and the remote MCP server project.
+/// </summary>
 public sealed class ComplianceToolService(DynamoDbRepository dynamoDb)
 {
     public Task<string> VerifyTenantIsolationAsync(TenantInfo tenant, CancellationToken cancellationToken = default) =>
