@@ -98,7 +98,13 @@ public sealed class RequestLogContext
 
     public long ElapsedMs => _stopwatch.ElapsedMilliseconds;
 
-    public Dictionary<string, string> ResponseHeaders
+    public Dictionary<string, string> ResponseHeaders =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["x-request-id"] = RequestId
+        };
+
+    public Dictionary<string, string> StreamResponseHeaders
     {
         get
         {

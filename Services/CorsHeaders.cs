@@ -57,7 +57,12 @@ public static class CorsHeaders
 
     private static string? ResolveAllowedOrigin(string? origin, string allowedOrigins)
     {
-        if (string.IsNullOrWhiteSpace(allowedOrigins) || allowedOrigins == "*")
+        if (string.IsNullOrWhiteSpace(allowedOrigins))
+        {
+            return null;
+        }
+
+        if (allowedOrigins == "*")
         {
             return "*";
         }

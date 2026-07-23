@@ -10,7 +10,7 @@ public sealed class AppConfig
     public string AdminApiKey { get; init; } = string.Empty;
     public string McpServerUrl { get; init; } = string.Empty;
     public string McpServerApiKey { get; init; } = string.Empty;
-    public string CorsAllowedOrigins { get; init; } = "*";
+    public string CorsAllowedOrigins { get; init; } = string.Empty;
 
     public static AppConfig Load()
     {
@@ -24,7 +24,7 @@ public sealed class AppConfig
             AdminApiKey = Environment.GetEnvironmentVariable("ADMIN_API_KEY") ?? string.Empty,
             McpServerUrl = (Environment.GetEnvironmentVariable("MCP_SERVER_URL") ?? string.Empty).TrimEnd('/'),
             McpServerApiKey = Environment.GetEnvironmentVariable("MCP_SERVER_API_KEY") ?? string.Empty,
-            CorsAllowedOrigins = Environment.GetEnvironmentVariable("CORS_ALLOWED_ORIGINS") ?? "*"
+            CorsAllowedOrigins = Environment.GetEnvironmentVariable("CORS_ALLOWED_ORIGINS") ?? string.Empty
         };
     }
 
