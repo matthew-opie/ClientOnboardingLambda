@@ -10,7 +10,6 @@ namespace ClientOnboardingLambda.Services;
 
 public static class HttpResponseFactory
 {
-    // CORS is handled exclusively by the Lambda Function URL configuration.
     public static APIGatewayHttpApiV2ProxyResponse Json(
         object body,
         int statusCode,
@@ -94,7 +93,7 @@ public sealed class RequestRouter(
         ILambdaLogger logger,
         CancellationToken cancellationToken = default)
     {
-        var log = RequestLogContext.FromRequest(request, logger);
+        var log = RequestLogContext.FromRequest(request, logger, config);
         log.LogStage("request_received");
 
         var method = request.RequestContext.Http.Method?.ToUpperInvariant() ?? "GET";
@@ -102,6 +101,16 @@ public sealed class RequestRouter(
 
         try
         {
+            if (method == "OPTIONS")
+            {
+                return new APIGatewayHttpApiV2ProxyResponse
+                {
+                    StatusCode = 204,
+                    Headers = CorsHeaders.BuildPreflight(CorsHeaders.GetOrigin(request), config.CorsAllowedOrigins),
+                    Body = string.Empty
+                };
+            }
+
             APIGatewayHttpApiV2ProxyResponse response = (method, path) switch
             {
                 ("GET", "/health") => await HandleHealthAsync(cancellationToken, log),
@@ -364,11 +373,12 @@ public sealed class RequestRouter(
         ILambdaContext lambdaContext,
         CancellationToken cancellationToken = default)
     {
-        var log = RequestLogContext.FromRequest(request, lambdaContext.Logger);
+        var log = RequestLogContext.FromRequest(request, lambdaContext.Logger, config);
         var path = request.RawPath?.TrimEnd('/') ?? "/";
         var tenantId = path["/tenants/".Length..^"/query/stream".Length];
 
-        await using var responseStream = LambdaResponseStreamFactory.CreateHttpStream(SseStreamWriter.CreatePrelude());
+        await using var responseStream = LambdaResponseStreamFactory.CreateHttpStream(
+            SseStreamWriter.CreatePrelude(log.ResponseHeaders));
         var sse = new SseStreamWriter(responseStream);
 
         try

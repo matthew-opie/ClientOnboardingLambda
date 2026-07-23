@@ -21,14 +21,29 @@ public sealed class SseStreamWriter(Stream output)
         await output.FlushAsync(cancellationToken);
     }
 
-    public static HttpResponseStreamPrelude CreatePrelude(HttpStatusCode statusCode = HttpStatusCode.OK) => new()
+    public static HttpResponseStreamPrelude CreatePrelude(
+        IDictionary<string, string>? extraHeaders = null,
+        HttpStatusCode statusCode = HttpStatusCode.OK)
     {
-        StatusCode = statusCode,
-        Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Type"] = "text/event-stream; charset=utf-8",
             ["Cache-Control"] = "no-cache",
             ["Connection"] = "keep-alive"
+        };
+
+        if (extraHeaders is not null)
+        {
+            foreach (var pair in extraHeaders)
+            {
+                headers[pair.Key] = pair.Value;
+            }
         }
-    };
+
+        return new HttpResponseStreamPrelude
+        {
+            StatusCode = statusCode,
+            Headers = headers
+        };
+    }
 }

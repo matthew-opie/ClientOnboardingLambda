@@ -12,11 +12,19 @@ public sealed class RequestLogContext
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public RequestLogContext(ILambdaLogger logger, string requestId, string method, string path)
+    public RequestLogContext(
+        ILambdaLogger logger,
+        string requestId,
+        string method,
+        string path,
+        string? origin,
+        string corsAllowedOrigins)
     {
         Logger = logger;
         RequestId = requestId;
         Route = $"{method} {path}";
+        _origin = origin;
+        _corsAllowedOrigins = corsAllowedOrigins;
         _stopwatch = Stopwatch.StartNew();
     }
 
@@ -25,13 +33,24 @@ public sealed class RequestLogContext
     public ILambdaLogger Logger { get; }
 
     private readonly Stopwatch _stopwatch;
+    private readonly string? _origin;
+    private readonly string _corsAllowedOrigins;
 
-    public static RequestLogContext FromRequest(APIGatewayHttpApiV2ProxyRequest request, ILambdaLogger logger)
+    public static RequestLogContext FromRequest(
+        APIGatewayHttpApiV2ProxyRequest request,
+        ILambdaLogger logger,
+        AppConfig config)
     {
         var method = request.RequestContext.Http.Method?.ToUpperInvariant() ?? "GET";
         var path = request.RawPath?.TrimEnd('/') ?? "/";
         var requestId = ResolveRequestId(request);
-        return new RequestLogContext(logger, requestId, method, path);
+        return new RequestLogContext(
+            logger,
+            requestId,
+            method,
+            path,
+            CorsHeaders.GetOrigin(request),
+            config.CorsAllowedOrigins);
     }
 
     public void LogStage(
@@ -79,8 +98,15 @@ public sealed class RequestLogContext
 
     public long ElapsedMs => _stopwatch.ElapsedMilliseconds;
 
-    public Dictionary<string, string> ResponseHeaders =>
-        new(StringComparer.OrdinalIgnoreCase) { ["x-request-id"] = RequestId };
+    public Dictionary<string, string> ResponseHeaders
+    {
+        get
+        {
+            var headers = CorsHeaders.Build(_origin, _corsAllowedOrigins);
+            headers["x-request-id"] = RequestId;
+            return headers;
+        }
+    }
 
     private static string ResolveRequestId(APIGatewayHttpApiV2ProxyRequest request)
     {
