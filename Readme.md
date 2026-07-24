@@ -107,6 +107,21 @@ dotnet lambda deploy-function ClientOnboardingLambda
 
 Enable **Response streaming** on the Function URL for `/query/stream`.
 
+## IAM
+
+Inline policy `OnboardingPlatformAccess` on execution role `ClientOnboardingLambda-role-pofo17ry` — source of truth: `iam/OnboardingPlatformAccess.json`.
+
+After changing DynamoDB access, apply with:
+
+```powershell
+aws iam put-role-policy `
+  --role-name ClientOnboardingLambda-role-pofo17ry `
+  --policy-name OnboardingPlatformAccess `
+  --policy-document file://iam/OnboardingPlatformAccess.json
+```
+
+Parent-chunk retrieval uses `dynamodb:BatchGetItem` (added with the parallel retrieval work).
+
 ## Local build
 
 ```powershell
