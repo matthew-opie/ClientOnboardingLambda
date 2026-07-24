@@ -18,13 +18,18 @@ public sealed class ComplianceToolService(DynamoDbRepository dynamoDb)
             collection = tenant.QdrantCollection
         }));
 
-    public Task<string> HybridRetrieveAsync(int retrievedChunks, double vectorMs, CancellationToken cancellationToken = default) =>
+    public Task<string> HybridRetrieveAsync(int retrievedChunks, RetrievalTimings timings, CancellationToken cancellationToken = default) =>
         Task.FromResult(JsonSerializer.Serialize(new
         {
             parent_chunks = Math.Max(1, retrievedChunks / 2),
             child_chunks = retrievedChunks,
             reranked = retrievedChunks,
-            p95_ms = Math.Round(vectorMs)
+            embedding_ms = Math.Round(timings.EmbeddingMs),
+            qdrant_ms = Math.Round(timings.QdrantSearchMs),
+            dense_ms = Math.Round(timings.DenseSearchMs),
+            bm25_ms = Math.Round(timings.Bm25Ms),
+            rerank_ms = Math.Round(timings.HybridRerankMs),
+            child_chunks_cached = timings.ChildChunksCached
         }));
 
     public async Task<string> VerifyKycStatusAsync(TenantInfo tenant, CancellationToken cancellationToken = default)
@@ -73,12 +78,13 @@ public sealed class ComplianceToolService(DynamoDbRepository dynamoDb)
     public Task<string> AssembleDynamoDbContextAsync(
         string partitionKey,
         int retrievedChunks,
-        double vectorMs,
+        RetrievalTimings timings,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(JsonSerializer.Serialize(new
         {
             items_assembled = retrievedChunks,
-            single_table_query_ms = Math.Round(vectorMs / 2),
+            single_table_query_ms = Math.Round(timings.DynamoDbAssemblyMs + timings.ParentAssemblyMs),
+            child_chunks_cached = timings.ChildChunksCached,
             payload_bytes = retrievedChunks * 1400
         }));
 
@@ -102,7 +108,7 @@ public sealed class McpToolExecutor(McpClientRouter mcpClient)
         TenantInfo tenant,
         string query,
         int retrievedChunks,
-        double vectorMs,
+        RetrievalTimings timings,
         CancellationToken cancellationToken = default)
     {
         var logs = new List<ToolLogDto>
@@ -123,7 +129,11 @@ public sealed class McpToolExecutor(McpClientRouter mcpClient)
                 new Dictionary<string, object?>
                 {
                     ["retrievedChunks"] = retrievedChunks,
-                    ["vectorMs"] = vectorMs
+                    ["embeddingMs"] = timings.EmbeddingMs,
+                    ["qdrantSearchMs"] = timings.QdrantSearchMs,
+                    ["bm25Ms"] = timings.Bm25Ms,
+                    ["hybridRerankMs"] = timings.HybridRerankMs,
+                    ["childChunksCached"] = timings.ChildChunksCached
                 },
                 cancellationToken),
             await mcpClient.CallToolAsync(
@@ -154,7 +164,9 @@ public sealed class McpToolExecutor(McpClientRouter mcpClient)
             {
                 ["partitionKey"] = tenant.PartitionKey,
                 ["retrievedChunks"] = retrievedChunks,
-                ["vectorMs"] = vectorMs
+                ["dynamoDbAssemblyMs"] = timings.DynamoDbAssemblyMs,
+                ["parentAssemblyMs"] = timings.ParentAssemblyMs,
+                ["childChunksCached"] = timings.ChildChunksCached
             },
             cancellationToken));
 
@@ -283,7 +295,7 @@ public sealed class McpClientRouter(
             "hybrid_retrieve" =>
                 await complianceTools.HybridRetrieveAsync(
                     GetInt(arguments, "retrievedChunks"),
-                    GetDouble(arguments, "vectorMs"),
+                    ReadRetrievalTimings(arguments),
                     cancellationToken),
             "verify_kyc_status" when tenant is not null =>
                 await complianceTools.VerifyKycStatusAsync(tenant, cancellationToken),
@@ -296,7 +308,7 @@ public sealed class McpClientRouter(
                 await complianceTools.AssembleDynamoDbContextAsync(
                     GetString(arguments, "partitionKey") ?? tenant?.PartitionKey ?? string.Empty,
                     GetInt(arguments, "retrievedChunks"),
-                    GetDouble(arguments, "vectorMs"),
+                    ReadRetrievalTimings(arguments),
                     cancellationToken),
             _ => throw new InvalidOperationException($"Unknown MCP tool: {toolName}")
         };
@@ -353,6 +365,33 @@ public sealed class McpClientRouter(
             JsonElement { ValueKind: JsonValueKind.Number } element => element.GetInt32(),
             _ when int.TryParse(value.ToString(), out var parsed) => parsed,
             _ => 0
+        };
+    }
+
+    private static RetrievalTimings ReadRetrievalTimings(IReadOnlyDictionary<string, object?> arguments) =>
+        new(
+            GetDouble(arguments, "embeddingMs"),
+            GetDouble(arguments, "qdrantSearchMs"),
+            GetDouble(arguments, "dynamoDbAssemblyMs"),
+            GetDouble(arguments, "bm25Ms"),
+            GetDouble(arguments, "hybridRerankMs"),
+            GetDouble(arguments, "parentAssemblyMs"),
+            GetBool(arguments, "childChunksCached"));
+
+    private static bool GetBool(IReadOnlyDictionary<string, object?> arguments, string key)
+    {
+        if (!arguments.TryGetValue(key, out var value) || value is null)
+        {
+            return false;
+        }
+
+        return value switch
+        {
+            bool b => b,
+            JsonElement { ValueKind: JsonValueKind.True } => true,
+            JsonElement { ValueKind: JsonValueKind.False } => false,
+            _ when bool.TryParse(value.ToString(), out var parsed) => parsed,
+            _ => false
         };
     }
 

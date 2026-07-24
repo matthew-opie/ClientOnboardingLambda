@@ -70,7 +70,8 @@ public sealed class RequestRouter(
     DocumentIngestService ingest,
     RagasEvalService eval,
     OpenAiService openAi,
-    DynamoDbRepository dynamoDb)
+    DynamoDbRepository dynamoDb,
+    RetrievalWarmupService warmup)
 {
     public static RequestRouter Create(AppConfig config)
     {
@@ -85,7 +86,8 @@ public sealed class RequestRouter(
         var ingest = new DocumentIngestService(config, new AmazonS3Client(), dynamoDb, qdrant, openAi);
         var evalStatusWriter = new EvalStatusWriter(dynamoDb);
         var evalService = new RagasEvalService(rag, openAi, evalStatusWriter);
-        return new RequestRouter(config, rag, ingest, evalService, openAi, dynamoDb);
+        var warmup = new RetrievalWarmupService(dynamoDb, qdrant);
+        return new RequestRouter(config, rag, ingest, evalService, openAi, dynamoDb, warmup);
     }
 
     public async Task<APIGatewayHttpApiV2ProxyResponse> RouteAsync(
@@ -114,6 +116,7 @@ public sealed class RequestRouter(
             APIGatewayHttpApiV2ProxyResponse response = (method, path) switch
             {
                 ("GET", "/health") => await HandleHealthAsync(cancellationToken, log),
+                ("GET", "/warm") => await HandleWarmAsync(request, log, cancellationToken),
                 ("GET", "/tenants") => HandleTenants(log),
                 ("POST", "/chat") => await HandleLegacyChatAsync(request.Body, log, cancellationToken),
                 _ when method == "POST" && path.StartsWith("/admin/ingest/", StringComparison.OrdinalIgnoreCase)
@@ -151,6 +154,39 @@ public sealed class RequestRouter(
             logger.LogError($"Unhandled route error [{log.RequestId}]: {ex}");
             return HttpResponseFactory.Error(ex.Message, 500, log.RequestId, log.ResponseHeaders);
         }
+    }
+
+    private async Task<APIGatewayHttpApiV2ProxyResponse> HandleWarmAsync(
+        APIGatewayHttpApiV2ProxyRequest request,
+        RequestLogContext log,
+        CancellationToken cancellationToken)
+    {
+        config.ValidateForQuery();
+
+        var tenantId = GetQueryParameter(request, "tenant") ?? TenantRegistry.All[0].TenantId;
+        var tenant = TenantRegistry.Find(tenantId);
+        if (tenant is null)
+        {
+            return HttpResponseFactory.Error($"Unknown tenant: {tenantId}", 404, log.RequestId, log.ResponseHeaders);
+        }
+
+        log.LogStage("warm_started", tenantId: tenant.TenantId);
+        var warmStarted = Environment.TickCount64;
+        var summary = await warmup.WarmAsync(tenant, cancellationToken);
+        log.LogStage("warm_complete", durationMs: Environment.TickCount64 - warmStarted, tenantId: tenant.TenantId);
+
+        return HttpResponseFactory.Json(new
+        {
+            success = true,
+            requestId = log.RequestId,
+            timestamp = DateTime.UtcNow,
+            tenantId = summary.TenantId,
+            childChunkCount = summary.ChildChunkCount,
+            childChunksCached = summary.ChildChunksCached,
+            dynamoDbMs = Math.Round(summary.DynamoDbMs),
+            qdrantMs = Math.Round(summary.QdrantMs),
+            totalMs = Math.Round(summary.TotalMs)
+        }, 200, log.ResponseHeaders);
     }
 
     private Task<APIGatewayHttpApiV2ProxyResponse> HandleHealthAsync(
@@ -425,5 +461,26 @@ public sealed class RequestRouter(
 
         return request.Headers.FirstOrDefault(h =>
             string.Equals(h.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
+    }
+
+    private static string? GetQueryParameter(APIGatewayHttpApiV2ProxyRequest request, string name)
+    {
+        if (string.IsNullOrWhiteSpace(request.RawQueryString))
+        {
+            return null;
+        }
+
+        var query = request.RawQueryString.TrimStart('?');
+        foreach (var segment in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = segment.Split('=', 2);
+            if (parts.Length == 2 &&
+                string.Equals(Uri.UnescapeDataString(parts[0]), name, StringComparison.OrdinalIgnoreCase))
+            {
+                return Uri.UnescapeDataString(parts[1]);
+            }
+        }
+
+        return null;
     }
 }

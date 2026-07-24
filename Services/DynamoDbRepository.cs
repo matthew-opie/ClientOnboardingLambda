@@ -126,22 +126,75 @@ public sealed class DynamoDbRepository(IAmazonDynamoDB client, string tableName)
 
     public async Task<ParentChunkRecord?> GetParentChunkAsync(string partitionKey, string parentId, CancellationToken cancellationToken = default)
     {
-        var item = await GetItemAsync(partitionKey, $"PARENT#{parentId}", cancellationToken);
-        if (item is null)
+        var parents = await BatchGetParentChunksAsync(partitionKey, [parentId], cancellationToken);
+        return parents.TryGetValue(parentId, out var parent) ? parent : null;
+    }
+
+    public async Task<IReadOnlyDictionary<string, ParentChunkRecord>> BatchGetParentChunksAsync(
+        string partitionKey,
+        IReadOnlyList<string> parentIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (parentIds.Count == 0)
         {
-            return null;
+            return new Dictionary<string, ParentChunkRecord>(StringComparer.OrdinalIgnoreCase);
         }
 
-        return new ParentChunkRecord
+        var distinctIds = parentIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (distinctIds.Count == 0)
         {
-            ParentId = parentId,
-            DocumentId = item.TryGetValue("documentId", out var doc) ? doc.S : string.Empty,
-            SectionTitle = item.TryGetValue("sectionTitle", out var title) ? title.S : "Retrieved Context",
-            Text = item.TryGetValue("text", out var text) ? text.S : string.Empty,
-            PageNumber = item.TryGetValue("pageNumber", out var page) && int.TryParse(page.N, out var parsedPage)
-                ? parsedPage
-                : 0
-        };
+            return new Dictionary<string, ParentChunkRecord>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var parents = new Dictionary<string, ParentChunkRecord>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var batch in distinctIds.Chunk(100))
+        {
+            var response = await client.BatchGetItemAsync(new BatchGetItemRequest
+            {
+                RequestItems = new Dictionary<string, KeysAndAttributes>
+                {
+                    [tableName] = new KeysAndAttributes
+                    {
+                        Keys = batch.Select(parentId => new Dictionary<string, AttributeValue>
+                        {
+                            ["PK"] = new AttributeValue(partitionKey),
+                            ["SK"] = new AttributeValue($"PARENT#{parentId}")
+                        }).ToList()
+                    }
+                }
+            }, cancellationToken);
+
+            if (!response.Responses.TryGetValue(tableName, out var items))
+            {
+                continue;
+            }
+
+            foreach (var item in items)
+            {
+                var sk = item["SK"].S;
+                var parentId = sk.StartsWith("PARENT#", StringComparison.Ordinal)
+                    ? sk["PARENT#".Length..]
+                    : sk;
+
+                parents[parentId] = new ParentChunkRecord
+                {
+                    ParentId = parentId,
+                    DocumentId = item.TryGetValue("documentId", out var doc) ? doc.S : string.Empty,
+                    SectionTitle = item.TryGetValue("sectionTitle", out var title) ? title.S : "Retrieved Context",
+                    Text = item.TryGetValue("text", out var text) ? text.S : string.Empty,
+                    PageNumber = item.TryGetValue("pageNumber", out var page) && int.TryParse(page.N, out var parsedPage)
+                        ? parsedPage
+                        : 0
+                };
+            }
+        }
+
+        return parents;
     }
 
     public async Task DeleteTenantDataAsync(string partitionKey, CancellationToken cancellationToken = default)

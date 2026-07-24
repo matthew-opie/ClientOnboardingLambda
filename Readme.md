@@ -76,6 +76,7 @@ Async:     S3 → SQS → DocumentIngestLambda
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Config probe |
+| `GET` | `/warm` | Prime child chunk cache + Qdrant (no OpenAI) |
 | `GET` | `/tenants` | List 10 tenants |
 | `POST` | `/tenants/{id}/query` | RAG query (JSON) |
 | `POST` | `/tenants/{id}/query/stream` | RAG query (SSE) |

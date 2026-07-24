@@ -20,6 +20,8 @@ public sealed class DocumentIngestService(
     {
         config.ValidateForIngest();
 
+        ChildChunkCache.Invalidate(tenant.PartitionKey);
+
         var prefix = $"{tenant.TenantId}/";
         var objects = await ListObjectsAsync(prefix, cancellationToken);
         if (objects.Count == 0)
@@ -122,6 +124,8 @@ public sealed class DocumentIngestService(
         }
 
         await qdrant.UpsertPointsAsync(tenant.QdrantCollection, qdrantPoints, cancellationToken);
+
+        ChildChunkCache.Invalidate(tenant.PartitionKey);
 
         return new IngestSummary(
             pdfKeys.Count,

@@ -92,14 +92,26 @@ public sealed class ContextDto
 
 public sealed class TelemetryDto
 {
-    [JsonPropertyName("vectorSearchP95Ms")]
-    public double VectorSearchP95Ms { get; set; }
+    [JsonPropertyName("embeddingMs")]
+    public double EmbeddingMs { get; set; }
+
+    [JsonPropertyName("qdrantSearchMs")]
+    public double QdrantSearchMs { get; set; }
 
     [JsonPropertyName("dynamoDbAssemblyMs")]
     public double DynamoDbAssemblyMs { get; set; }
 
+    [JsonPropertyName("parentAssemblyMs")]
+    public double ParentAssemblyMs { get; set; }
+
+    [JsonPropertyName("bm25Ms")]
+    public double Bm25Ms { get; set; }
+
     [JsonPropertyName("hybridRerankMs")]
     public double HybridRerankMs { get; set; }
+
+    [JsonPropertyName("childChunksCached")]
+    public bool ChildChunksCached { get; set; }
 
     [JsonPropertyName("ragasFaithfulness")]
     public double RagasFaithfulness { get; set; }
@@ -109,6 +121,18 @@ public sealed class TelemetryDto
 
     [JsonPropertyName("retrievedChunks")]
     public int RetrievedChunks { get; set; }
+}
+
+public sealed record RetrievalTimings(
+    double EmbeddingMs,
+    double QdrantSearchMs,
+    double DynamoDbAssemblyMs,
+    double Bm25Ms,
+    double HybridRerankMs,
+    double ParentAssemblyMs,
+    bool ChildChunksCached)
+{
+    public double DenseSearchMs => EmbeddingMs + QdrantSearchMs;
 }
 
 public sealed class EvalStatusDto

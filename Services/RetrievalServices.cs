@@ -1,7 +1,23 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using ClientOnboardingLambda.Models;
 
 namespace ClientOnboardingLambda.Services;
+
+internal static class ChildChunkCache
+{
+    private static readonly ConcurrentDictionary<string, IReadOnlyList<ChildChunkRecord>> Cache = new(StringComparer.OrdinalIgnoreCase);
+
+    public static bool TryGet(string partitionKey, out IReadOnlyList<ChildChunkRecord> chunks) =>
+        Cache.TryGetValue(partitionKey, out chunks!);
+
+    public static void Set(string partitionKey, IReadOnlyList<ChildChunkRecord> chunks) =>
+        Cache[partitionKey] = chunks;
+
+    public static void Invalidate(string partitionKey) =>
+        Cache.TryRemove(partitionKey, out _);
+}
 
 public static class TextChunker
 {
@@ -200,37 +216,53 @@ public static class Bm25Scorer
 
 public sealed class HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantClient qdrant, OpenAiService openAi)
 {
-    public async Task<(IReadOnlyList<RetrievedChunkResult> Chunks, double VectorMs, double DynamoMs, double RerankMs, int RetrievedCount)> RetrieveAsync(
+    public async Task<(IReadOnlyList<RetrievedChunkResult> Chunks, RetrievalTimings Timings, int RetrievedCount)> RetrieveAsync(
         TenantInfo tenant,
         string query,
         CancellationToken cancellationToken = default)
     {
-        var dynamoSw = System.Diagnostics.Stopwatch.StartNew();
-        var childChunks = await dynamoDb.GetChildChunksAsync(tenant.PartitionKey, cancellationToken);
-        dynamoSw.Stop();
+        var embedTask = TimedEmbedAsync(query, cancellationToken);
+        var childTask = LoadChildChunksAsync(tenant.PartitionKey, cancellationToken);
+
+        await Task.WhenAll(embedTask, childTask);
+
+        var (queryVector, embeddingMs) = await embedTask;
+        var (childChunks, dynamoMs, childChunksCached) = await childTask;
 
         if (childChunks.Count == 0)
         {
             throw new InvalidOperationException($"No ingested chunks found for {tenant.TenantId}. Run /admin/ingest/{tenant.TenantId} first.");
         }
 
-        var vectorSw = System.Diagnostics.Stopwatch.StartNew();
-        var queryVector = await openAi.EmbedAsync(query, cancellationToken);
-        var denseHits = await qdrant.SearchAsync(tenant.QdrantCollection, queryVector, limit: 8, cancellationToken);
-        vectorSw.Stop();
+        var qdrantTask = TimedQdrantSearchAsync(tenant.QdrantCollection, queryVector, cancellationToken);
+        var bm25Task = Task.Run(() => TimedBm25Score(childChunks, query), cancellationToken);
 
-        var rerankSw = System.Diagnostics.Stopwatch.StartNew();
-        var bm25Hits = Bm25Scorer.Score(childChunks, query, topK: 8);
+        await Task.WhenAll(qdrantTask, bm25Task);
+
+        var (denseHits, qdrantMs) = await qdrantTask;
+        var (bm25Hits, bm25Ms) = await bm25Task;
+
+        var rerankSw = Stopwatch.StartNew();
         var fused = HybridRetrievalFusion.FuseResults(bm25Hits, denseHits);
         rerankSw.Stop();
 
         var parentHits = HybridRetrievalFusion.SelectParentHits(fused);
+
+        var parentSw = Stopwatch.StartNew();
+        var parentRecords = await dynamoDb.BatchGetParentChunksAsync(
+            tenant.PartitionKey,
+            parentHits.Select(hit => hit.ParentId).ToList(),
+            cancellationToken);
+        parentSw.Stop();
+
         var chunks = new List<RetrievedChunkResult>();
 
         foreach (var hit in parentHits)
         {
-            var parent = await dynamoDb.GetParentChunkAsync(tenant.PartitionKey, hit.ParentId, cancellationToken)
-                         ?? throw new InvalidOperationException($"Parent chunk {hit.ParentId} not found.");
+            if (!parentRecords.TryGetValue(hit.ParentId, out var parent))
+            {
+                throw new InvalidOperationException($"Parent chunk {hit.ParentId} not found.");
+            }
 
             chunks.Add(new RetrievedChunkResult
             {
@@ -245,7 +277,61 @@ public sealed class HybridRetrievalService(DynamoDbRepository dynamoDb, QdrantCl
             });
         }
 
-        return (chunks, vectorSw.Elapsed.TotalMilliseconds, dynamoSw.Elapsed.TotalMilliseconds, rerankSw.Elapsed.TotalMilliseconds, chunks.Count);
+        var timings = new RetrievalTimings(
+            embeddingMs,
+            qdrantMs,
+            dynamoMs,
+            bm25Ms,
+            rerankSw.Elapsed.TotalMilliseconds,
+            parentSw.Elapsed.TotalMilliseconds,
+            childChunksCached);
+
+        return (chunks, timings, chunks.Count);
+    }
+
+    private async Task<(float[] Vector, double Ms)> TimedEmbedAsync(string query, CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        var vector = await openAi.EmbedAsync(query, cancellationToken);
+        sw.Stop();
+        return (vector, sw.Elapsed.TotalMilliseconds);
+    }
+
+    private async Task<(List<ChildChunkRecord> Chunks, double Ms, bool Cached)> LoadChildChunksAsync(
+        string partitionKey,
+        CancellationToken cancellationToken)
+    {
+        if (ChildChunkCache.TryGet(partitionKey, out var cached))
+        {
+            return (cached.ToList(), 0, true);
+        }
+
+        var sw = Stopwatch.StartNew();
+        var chunks = await dynamoDb.GetChildChunksAsync(partitionKey, cancellationToken);
+        sw.Stop();
+        ChildChunkCache.Set(partitionKey, chunks);
+        return (chunks, sw.Elapsed.TotalMilliseconds, false);
+    }
+
+    private async Task<(List<QdrantSearchHit> Hits, double Ms)> TimedQdrantSearchAsync(
+        string collection,
+        float[] queryVector,
+        CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        var hits = await qdrant.SearchAsync(collection, queryVector, limit: 8, cancellationToken);
+        sw.Stop();
+        return (hits, sw.Elapsed.TotalMilliseconds);
+    }
+
+    private static (List<(ChildChunkRecord Chunk, double Score)> Hits, double Ms) TimedBm25Score(
+        IReadOnlyList<ChildChunkRecord> childChunks,
+        string query)
+    {
+        var sw = Stopwatch.StartNew();
+        var hits = Bm25Scorer.Score(childChunks, query, topK: 8);
+        sw.Stop();
+        return (hits, sw.Elapsed.TotalMilliseconds);
     }
 }
 

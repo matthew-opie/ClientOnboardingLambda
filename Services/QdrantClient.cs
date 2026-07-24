@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -37,6 +38,22 @@ public sealed class QdrantClient(string baseUrl, string apiKey)
                 throw new InvalidOperationException($"Qdrant upsert failed ({(int)response.StatusCode}): {body}");
             }
         }
+    }
+
+    public async Task<double> PingCollectionAsync(string collection, CancellationToken cancellationToken = default)
+    {
+        var sw = Stopwatch.StartNew();
+        using var request = CreateRequest(HttpMethod.Get, $"/collections/{collection}");
+        using var response = await HttpClient.SendAsync(request, cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"Qdrant collection probe failed ({(int)response.StatusCode}): {body}");
+        }
+
+        sw.Stop();
+        return sw.Elapsed.TotalMilliseconds;
     }
 
     public async Task<List<QdrantSearchHit>> SearchAsync(string collection, float[] vector, int limit, CancellationToken cancellationToken = default)
@@ -104,12 +121,14 @@ public sealed class QdrantClient(string baseUrl, string apiKey)
         }
     }
 
-    private HttpRequestMessage CreateRequest(HttpMethod method, string path, object payload)
+    private HttpRequestMessage CreateRequest(HttpMethod method, string path, object? payload = null)
     {
-        var request = new HttpRequestMessage(method, $"{_baseUrl}{path}")
+        var request = new HttpRequestMessage(method, $"{_baseUrl}{path}");
+        if (payload is not null)
         {
-            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
-        };
+            request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        }
+
         request.Headers.Add("api-key", apiKey);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return request;

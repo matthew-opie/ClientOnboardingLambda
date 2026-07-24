@@ -11,7 +11,7 @@ public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExe
         CancellationToken cancellationToken = default)
     {
         var retrievalStarted = Environment.TickCount64;
-        var (chunks, vectorMs, dynamoMs, rerankMs, retrievedCount) =
+        var (chunks, timings, retrievedCount) =
             await retrieval.RetrieveAsync(tenant, query, cancellationToken);
 
         log?.LogStage(
@@ -21,7 +21,7 @@ public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExe
             retrievedChunks: retrievedCount);
 
         var toolsStarted = Environment.TickCount64;
-        var toolLogs = await tools.ExecuteAsync(tenant, query, retrievedCount, vectorMs, cancellationToken);
+        var toolLogs = await tools.ExecuteAsync(tenant, query, retrievedCount, timings, cancellationToken);
 
         log?.LogStage(
             "mcp_tools",
@@ -66,9 +66,13 @@ public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExe
             Contexts = contextDtos,
             Telemetry = new TelemetryDto
             {
-                VectorSearchP95Ms = Math.Round(vectorMs),
-                DynamoDbAssemblyMs = Math.Round(dynamoMs),
-                HybridRerankMs = Math.Round(rerankMs),
+                EmbeddingMs = Math.Round(timings.EmbeddingMs),
+                QdrantSearchMs = Math.Round(timings.QdrantSearchMs),
+                DynamoDbAssemblyMs = Math.Round(timings.DynamoDbAssemblyMs),
+                ParentAssemblyMs = Math.Round(timings.ParentAssemblyMs),
+                Bm25Ms = Math.Round(timings.Bm25Ms),
+                HybridRerankMs = Math.Round(timings.HybridRerankMs),
+                ChildChunksCached = timings.ChildChunksCached,
                 RagasFaithfulness = 0,
                 CrossTenantLeakPercent = 0,
                 RetrievedChunks = retrievedCount
@@ -84,7 +88,7 @@ public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExe
         CancellationToken cancellationToken = default)
     {
         var retrievalStarted = Environment.TickCount64;
-        var (chunks, vectorMs, dynamoMs, rerankMs, retrievedCount) =
+        var (chunks, timings, retrievedCount) =
             await retrieval.RetrieveAsync(tenant, query, cancellationToken);
 
         log?.LogStage(
@@ -97,7 +101,7 @@ public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExe
         await sse.WriteEventAsync("contexts", new { contexts = contextDtos }, cancellationToken);
 
         var toolsStarted = Environment.TickCount64;
-        var toolLogs = await tools.ExecuteAsync(tenant, query, retrievedCount, vectorMs, cancellationToken);
+        var toolLogs = await tools.ExecuteAsync(tenant, query, retrievedCount, timings, cancellationToken);
 
         foreach (var toolLog in toolLogs)
         {
@@ -140,9 +144,13 @@ public sealed class RagOrchestrator(HybridRetrievalService retrieval, McpToolExe
 
         var telemetry = new TelemetryDto
         {
-            VectorSearchP95Ms = Math.Round(vectorMs),
-            DynamoDbAssemblyMs = Math.Round(dynamoMs),
-            HybridRerankMs = Math.Round(rerankMs),
+            EmbeddingMs = Math.Round(timings.EmbeddingMs),
+            QdrantSearchMs = Math.Round(timings.QdrantSearchMs),
+            DynamoDbAssemblyMs = Math.Round(timings.DynamoDbAssemblyMs),
+            ParentAssemblyMs = Math.Round(timings.ParentAssemblyMs),
+            Bm25Ms = Math.Round(timings.Bm25Ms),
+            HybridRerankMs = Math.Round(timings.HybridRerankMs),
+            ChildChunksCached = timings.ChildChunksCached,
             RagasFaithfulness = 0,
             CrossTenantLeakPercent = 0,
             RetrievedChunks = retrievedCount
